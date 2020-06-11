@@ -1,4 +1,4 @@
-import { StorageEngine } from '.';
+import { StorageEngine, MemoryStorage } from '.';
 
 export type TableDef = {
   tableName: string;
@@ -7,6 +7,7 @@ export type TableDef = {
   indexes: { [key: string]: string };
   getSince(since: Date | null): Promise<any[]>;
   isItemDeleted?(item: any): boolean;
+  forceSync: boolean;
 };
 
 type IndexValue = { [key: string]: any };
@@ -16,16 +17,19 @@ type Meta = { lastSync: null | string };
 export default class Database {
   storage: StorageEngine;
   tables: TableDef[];
+  syncing: boolean;
 
   constructor(storage: StorageEngine) {
     this.storage = storage;
     this.tables = [];
+    this.syncing = false;
   }
 
   table(table: Partial<TableDef> & { tableName?: string }) {
     table.schemaName = table.schemaName || 'public';
     table.tablePath =
       table.tablePath || `${table.schemaName}.${table.tableName}`;
+    table.forceSync = Boolean(table.forceSync);
     this.tables.push(table as TableDef);
   }
 
@@ -33,7 +37,12 @@ export default class Database {
     const commitFunctions = await Promise.all(
       Object.values(this.tables).map(table => this.syncTable(table))
     );
-    await Promise.all(commitFunctions.map(fn => fn()));
+
+    this.syncing = true;
+    await this.storage.transaction(async (trx: MemoryStorage) => {
+      await Promise.all(commitFunctions.map(fn => fn(trx)));
+    });
+    this.syncing = false;
   }
 
   async getTableMeta(table: TableDef): Promise<Meta> {
@@ -59,14 +68,19 @@ export default class Database {
   async syncTable(table: TableDef) {
     const meta = await this.getTableMeta(table);
 
-    let since = meta.lastSync ? new Date(meta.lastSync) : null;
+    let since =
+      meta.lastSync && !table.forceSync ? new Date(meta.lastSync) : null;
 
     let updatedItems: any[] = [];
 
     const data = await table.getSince(since);
     updatedItems.push(...data);
 
-    return async () => {
+    return async (trx: MemoryStorage) => {
+      if (table.forceSync) {
+        await this.clearTable(trx, table);
+      }
+
       function recalculateIndexes(table: TableDef, item: any) {
         return Object.fromEntries(
           Object.entries(table.indexes).map(([indexName, columnName]) => {
@@ -78,16 +92,15 @@ export default class Database {
 
       for (let item of updatedItems) {
         if (table.isItemDeleted && table.isItemDeleted(item)) {
-          await this.deleteItem(table, item.id);
+          await this.deleteItem(trx, table, item.id);
           continue;
         }
 
         const itemKey = `${table.tablePath}.rows.${item.id}`;
         const indexesKey = `${table.tablePath}.rows.${item.id}.indexes`;
-        const oldIndexes: IndexValue =
-          (await this.storage.getItem(indexesKey)) || {};
+        const oldIndexes: IndexValue = (await trx.getItem(indexesKey)) || {};
 
-        await this.storage.setItem(itemKey, item);
+        await trx.setItem(itemKey, item);
         const newIndexes = recalculateIndexes(table, item);
 
         let removeFrom: IndexValue = {};
@@ -105,15 +118,14 @@ export default class Database {
           }
         }
 
-        await this.storage.setItem(indexesKey, newIndexes);
+        await trx.setItem(indexesKey, newIndexes);
 
         for (let indexName of Object.keys(table.indexes)) {
           if (!(indexName in removeFrom) && !(indexName in updateTo)) continue;
 
           const indexKey = `${table.tablePath}.indexes.${indexName}`;
 
-          let index = ((await this.storage.getItem(indexKey)) ||
-            []) as TableIndex;
+          let index = ((await trx.getItem(indexKey)) || []) as TableIndex;
 
           const remove = removeFrom[indexName];
           if (remove !== undefined) {
@@ -143,7 +155,7 @@ export default class Database {
             }
           }
 
-          await this.storage.setItem(indexKey, index);
+          await trx.setItem(indexKey, index);
         }
       }
 
@@ -168,7 +180,8 @@ export default class Database {
 
   async queryTable<T>(
     table: TableDef,
-    filter: any
+    filter: any,
+    limit: null | number = null
   ): Promise<T[] & { indexes: string[] }> {
     const rowsKeys = `${table.tablePath}.rows`;
     const scanFilters: { [key: string]: any } = {};
@@ -224,43 +237,49 @@ export default class Database {
         .filter(Boolean);
     }
 
-    // get all rows for our remaining ids
-    let rows = await Promise.all(
-      ids.map(async id => await this.storage.getItem(`${rowsKeys}.${id}`))
-    );
+    const result = [];
 
-    // filter out those
-    rows = rows.filter((row: any) => {
-      if (!row) return false;
-      return Object.entries(scanFilters).every(([column, value]) => {
+    for (let id of ids) {
+      const row = (await this.storage.getItem(`${rowsKeys}.${id}`)) as any;
+      if (!row) continue;
+
+      const matches = Object.entries(scanFilters).every(([column, value]) => {
         if (row[column] === undefined) return true; // @TODO for view functions?
         return row[column] === value;
       });
-    });
 
-    return Object.assign([...rows], { indexes }) as T[] & { indexes: string[] };
+      if (matches) {
+        result.push(row);
+        if (limit !== null && result.length >= limit) break;
+      }
+    }
+
+    return Object.assign([...result], { indexes }) as T[] & {
+      indexes: string[];
+    };
   }
 
   async delete(tablePath: string, filter: any) {
     const table = this.getTableByTablePath(tablePath);
     const rows = await this.queryTable(table, filter);
 
-    for (let row of rows) {
-      await this.deleteItem(table, (row as any).id);
-    }
+    await this.storage.transaction(async (trx: MemoryStorage) => {
+      for (let row of rows) {
+        await this.deleteItem(trx, table, (row as any).id);
+      }
+    });
   }
 
-  async deleteItem(table: TableDef, id: string) {
+  async deleteItem(trx: MemoryStorage, table: TableDef, id: string) {
     const indexesKey = `${table.tablePath}.rows.${id}.indexes`;
     const rowKey = `${table.tablePath}.rows.${id}`;
-    const removeFrom: IndexValue =
-      (await this.storage.getItem(indexesKey)) || {};
+    const removeFrom: IndexValue = (await trx.getItem(indexesKey)) || {};
 
     for (let indexName of Object.keys(table.indexes)) {
       const remove = removeFrom[indexName];
       const indexKey = `${table.tablePath}.indexes.${indexName}`;
 
-      let index = ((await this.storage.getItem(indexKey)) || []) as TableIndex;
+      let index = ((await trx.getItem(indexKey)) || []) as TableIndex;
 
       if (remove !== undefined) {
         index = index.map(group => {
@@ -272,16 +291,23 @@ export default class Database {
         });
       }
 
-      await this.storage.setItem(indexKey, index);
+      await trx.setItem(indexKey, index);
     }
 
-    await Promise.all([
-      this.storage.removeItem(rowKey),
-      this.storage.removeItem(indexesKey),
-    ]);
+    await Promise.all([trx.removeItem(rowKey), trx.removeItem(indexesKey)]);
   }
 
   async clear() {
     return this.storage.clear();
+  }
+
+  async clearTable(trx: MemoryStorage, table: TableDef) {
+    const ids = (await this.storage.getAllKeys()).filter(key =>
+      key.startsWith(table.tablePath)
+    );
+
+    for (let id of ids) {
+      await trx.removeItem(id);
+    }
   }
 }

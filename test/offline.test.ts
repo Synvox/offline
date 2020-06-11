@@ -151,3 +151,58 @@ it('throws when a table is not found', async () => {
 
   expect(error).not.toBe(null);
 });
+
+it('supports forced syncs', async () => {
+  const storage = new MemoryStorage();
+  const db = new Database(storage);
+
+  let pendingItems = Array.from({ length: 20 }).map((_, index) => {
+    return {
+      id: `${index}`,
+      body: `Comment body ${index}`,
+      active: true,
+      deleted: false,
+    };
+  });
+
+  let commentsSince = null;
+  let postsSince = null;
+
+  db.table({
+    tableName: 'comments',
+    indexes: {
+      primary: 'id',
+      enabled: 'active',
+    },
+    async getSince(s) {
+      commentsSince = s;
+      return pendingItems;
+    },
+    isItemDeleted(item) {
+      return item.deleted;
+    },
+  });
+
+  db.table({
+    tableName: 'posts',
+    forceSync: true,
+    indexes: {
+      primary: 'id',
+      enabled: 'active',
+    },
+    async getSince(s) {
+      postsSince = s;
+      return pendingItems;
+    },
+    isItemDeleted(item) {
+      return item.deleted;
+    },
+  });
+
+  await db.sync();
+  expect(commentsSince).toBe(null);
+  expect(postsSince).toBe(null);
+  await db.sync();
+  expect(commentsSince).not.toBe(null);
+  expect(postsSince).toBe(null);
+});
