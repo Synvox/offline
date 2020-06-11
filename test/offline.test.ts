@@ -23,41 +23,41 @@ it('supports basic functions', async () => {
 
   await db.sync();
 
-  expect((await db.query('public.comments', { id: `1` })).length).toBe(1);
-  expect((await db.query('public.comments', { id: `1` })).indexes).toEqual([
-    'public.comments.indexes.primary',
-  ]);
-  expect((await db.query('public.comments', { active: true })).length).toEqual(
-    20
-  );
+  expect((await db.query(['public', 'comments'], { id: `1` })).length).toBe(1);
   expect(
-    (await db.query('public.comments', { active: true })).indexes
+    (await db.query(['public', 'comments'], { id: `1` })).indexes
+  ).toEqual(['public.comments.indexes.primary']);
+  expect(
+    (await db.query(['public', 'comments'], { active: true })).length
+  ).toEqual(20);
+  expect(
+    (await db.query(['public', 'comments'], { active: true })).indexes
   ).toEqual(['public.comments.indexes.enabled']);
 
   pendingItems = [{ id: '1', body: 'new body', active: false }];
   await db.sync();
 
   expect(
-    (await db.query('public.comments', { body: 'new body' })).length
+    (await db.query(['public', 'comments'], { body: 'new body' })).length
   ).toEqual(1);
   expect(
-    (await db.query('public.comments', { body: 'new body' })).indexes
+    (await db.query(['public', 'comments'], { body: 'new body' })).indexes
   ).toEqual([]);
 
   // Re index
-  expect((await db.query('public.comments', { active: false })).length).toEqual(
-    1
-  );
   expect(
-    (await db.query('public.comments', { active: false })).indexes
+    (await db.query(['public', 'comments'], { active: false })).length
+  ).toEqual(1);
+  expect(
+    (await db.query(['public', 'comments'], { active: false })).indexes
   ).toEqual(['public.comments.indexes.enabled']);
 
   // multiple indexes
   expect(
-    (await db.query('public.comments', { active: false, id: '1' })).length
+    (await db.query(['public', 'comments'], { active: false, id: '1' })).length
   ).toEqual(1);
   expect(
-    (await db.query('public.comments', { active: false, id: '1' })).indexes
+    (await db.query(['public', 'comments'], { active: false, id: '1' })).indexes
   ).toEqual([
     'public.comments.indexes.enabled',
     'public.comments.indexes.primary',
@@ -66,17 +66,17 @@ it('supports basic functions', async () => {
   pendingItems = [{ id: '2', body: 'new body', active: false }];
   await db.sync();
 
-  expect((await db.query('public.comments', { active: false })).length).toEqual(
-    2
-  );
   expect(
-    (await db.query('public.comments', { active: false })).indexes
+    (await db.query(['public', 'comments'], { active: false })).length
+  ).toEqual(2);
+  expect(
+    (await db.query(['public', 'comments'], { active: false })).indexes
   ).toEqual(['public.comments.indexes.enabled']);
 
-  await db.delete('public.comments', { active: false });
-  expect((await db.query('public.comments', { active: false })).length).toEqual(
-    0
-  );
+  await db.delete(['public', 'comments'], { active: false });
+  expect(
+    (await db.query(['public', 'comments'], { active: false })).length
+  ).toEqual(0);
 
   // clear
   await db.clear();
@@ -113,12 +113,12 @@ it('deletes when items are deleted', async () => {
 
   await db.sync();
 
-  expect((await db.query('public.comments', {})).length).toEqual(20);
+  expect((await db.query(['public', 'comments'], {})).length).toEqual(20);
 
   pendingItems = [{ id: '1', body: 'bod', active: false, deleted: true }];
   await db.sync();
 
-  expect((await db.query('public.comments', {})).length).toEqual(19);
+  expect((await db.query(['public', 'comments'], {})).length).toEqual(19);
 });
 
 it('throws when a table is not found', async () => {
@@ -144,7 +144,7 @@ it('throws when a table is not found', async () => {
   let error: null | Error = null;
 
   try {
-    await db.query('public.thing', {});
+    await db.query(['public', 'thing'], {});
   } catch (e) {
     error = e;
   }
@@ -205,4 +205,33 @@ it('supports forced syncs', async () => {
   await db.sync();
   expect(commentsSince).not.toBe(null);
   expect(postsSince).toBe(null);
+});
+
+it('supports transactions on MemoryStorage', async () => {
+  const storage = new MemoryStorage();
+
+  await storage.setItem('key', 123);
+  expect(await storage.getItem('key')).toBe(123);
+
+  try {
+    await storage.transaction(async trx => {
+      expect(await trx.getItem('key')).toBe(123);
+
+      await trx.setItem('key', 456);
+      expect(await trx.getItem('key')).toBe(456);
+
+      throw new Error();
+    });
+  } catch (e) {}
+
+  expect(await storage.getItem('key')).toBe(123);
+
+  await storage.transaction(async trx => {
+    expect(await trx.getItem('key')).toBe(123);
+
+    await trx.setItem('key', 456);
+    expect(await trx.getItem('key')).toBe(456);
+  });
+
+  expect(await storage.getItem('key')).toBe(456);
 });

@@ -8,13 +8,16 @@ export interface StorageEngine {
 }
 
 export class MemoryStorage implements StorageEngine {
-  private state: { [key: string]: unknown } = {};
+  public state: { [key: string]: unknown };
   private pendingKeys: string[];
   private fallback: StorageEngine | null;
+
   constructor(fallback: StorageEngine | null = null) {
-    this.fallback = fallback || null;
+    this.state = {};
     this.pendingKeys = [];
+    this.fallback = fallback || null;
   }
+
   async getItem<T>(key: string) {
     if (!this.fallback || this.state.hasOwnProperty(key)) {
       return this.state[key] as T | undefined;
@@ -25,12 +28,14 @@ export class MemoryStorage implements StorageEngine {
 
     return value as T | undefined;
   }
+
   async setItem<T>(key: string, value: T) {
     this.state[key] = value;
     if (this.fallback) {
       this.pendingKeys.push(key);
     }
   }
+
   async removeItem(key: string) {
     delete this.state[key];
     if (this.fallback) {
@@ -38,6 +43,7 @@ export class MemoryStorage implements StorageEngine {
       await this.fallback.removeItem(key);
     }
   }
+
   async getAllKeys() {
     let keys = [
       ...(this.fallback ? await this.fallback.getAllKeys() : []),
@@ -46,21 +52,18 @@ export class MemoryStorage implements StorageEngine {
 
     return Array.from(new Set(keys));
   }
+
   async clear() {
     this.state = {};
     this.pendingKeys = [];
   }
+
   async transaction(fn: (trx: MemoryStorage) => Promise<void>) {
     const trx = new MemoryStorage(this);
-
-    try {
-      await fn(trx);
-      await trx.commit();
-    } catch (e) {
-      this.clear();
-      throw e;
-    }
+    await fn(trx);
+    await trx.commit();
   }
+
   async commit() {
     if (!this.fallback) return;
 

@@ -166,15 +166,17 @@ export default class Database {
     };
   }
 
-  getTableByTablePath(tablePath: string) {
+  selectTable(...selector: string[]) {
+    const [schemaName, tableName] = selector;
+    const tablePath = `${schemaName}.${tableName}`;
     const table = this.tables.find(table => table.tablePath === tablePath);
     if (!table)
       throw new Error(`The table with path ${tablePath} was not found.`);
     return table;
   }
 
-  async query(tablePath: string, filter: any) {
-    const table = this.getTableByTablePath(tablePath);
+  async query(tablePath: string[], filter: any) {
+    const table = this.selectTable(...tablePath);
     return await this.queryTable(table, filter);
   }
 
@@ -259,8 +261,8 @@ export default class Database {
     };
   }
 
-  async delete(tablePath: string, filter: any) {
-    const table = this.getTableByTablePath(tablePath);
+  async delete(tablePath: string[], filter: any) {
+    const table = this.selectTable(...tablePath);
     const rows = await this.queryTable(table, filter);
 
     await this.storage.transaction(async (trx: MemoryStorage) => {
