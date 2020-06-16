@@ -9,6 +9,7 @@ it('supports basic functions', async () => {
   });
 
   db.table({
+    schemaName: 'public',
     tableName: 'comments',
     indexes: {
       primary: 'id',
@@ -96,6 +97,7 @@ it('deletes when items are deleted', async () => {
   });
 
   db.table({
+    schemaName: 'public',
     tableName: 'comments',
     indexes: {
       primary: 'id',
@@ -126,6 +128,7 @@ it('throws when a table is not found', async () => {
   const db = new Database(storage);
 
   db.table({
+    schemaName: 'public',
     tableName: 'comments',
     indexes: {
       primary: 'id',
@@ -169,6 +172,7 @@ it('supports forced syncs', async () => {
   let postsSince = null;
 
   db.table({
+    schemaName: 'public',
     tableName: 'comments',
     indexes: {
       primary: 'id',
@@ -184,6 +188,7 @@ it('supports forced syncs', async () => {
   });
 
   db.table({
+    schemaName: 'public',
     tableName: 'posts',
     forceSync: true,
     indexes: {

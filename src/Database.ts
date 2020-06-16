@@ -1,8 +1,8 @@
 import { StorageEngine, MemoryStorage } from '.';
 
-export type TableDef = {
-  tableName: string;
-  schemaName: string;
+type TableLocation = { tableName: string; schemaName: string };
+
+export type TableDef = TableLocation & {
   tablePath: string;
   indexes: { [key: string]: string };
   getSince(since: Date | null): Promise<any[]>;
@@ -14,10 +14,21 @@ type IndexValue = { [key: string]: any };
 type TableIndex = { value: any; ids: string[] }[];
 type Meta = { lastSync: null | string };
 
+const storageKey = {
+  table: (table: TableLocation) => `${table.schemaName}.${table.tableName}`,
+  tableMeta: (table: TableLocation) => `${storageKey.table(table)}.meta`,
+  rows: (table: TableLocation) => `${storageKey.table(table)}.rows`,
+  row: (table: TableLocation, id: string) => `${storageKey.rows(table)}.${id}`,
+  rowIndex: (table: TableLocation, id: string) =>
+    `${storageKey.table(table)}.rows.${id}.indexes`,
+  index: (table: TableLocation, indexName: string) =>
+    `${storageKey.table(table)}.indexes.${indexName}`,
+};
+
 export default class Database {
-  storage: StorageEngine;
-  tables: TableDef[];
-  syncing: boolean;
+  private storage: StorageEngine;
+  private tables: TableDef[];
+  private syncing: boolean;
 
   constructor(storage: StorageEngine) {
     this.storage = storage;
@@ -25,10 +36,8 @@ export default class Database {
     this.syncing = false;
   }
 
-  table(table: Partial<TableDef> & { tableName?: string }) {
-    table.schemaName = table.schemaName || 'public';
-    table.tablePath =
-      table.tablePath || `${table.schemaName}.${table.tableName}`;
+  table(table: TableLocation & Partial<TableDef> & { tableName?: string }) {
+    table.tablePath = storageKey.table(table);
     table.forceSync = Boolean(table.forceSync);
     this.tables.push(table as TableDef);
   }
@@ -40,13 +49,19 @@ export default class Database {
 
     this.syncing = true;
     await this.storage.transaction(async (trx: MemoryStorage) => {
-      await Promise.all(commitFunctions.map(fn => fn(trx)));
+      for (let fn of commitFunctions) {
+        await fn(trx);
+      }
     });
     this.syncing = false;
   }
 
-  async getTableMeta(table: TableDef): Promise<Meta> {
-    const metaKey = `${table.tablePath}.meta`;
+  getSyncing() {
+    return this.syncing;
+  }
+
+  private async getTableMeta(table: TableDef): Promise<Meta> {
+    const metaKey = storageKey.tableMeta(table);
     let meta = (await this.storage.getItem(metaKey)) as Meta;
     if (meta) return meta as Meta;
 
@@ -56,16 +71,16 @@ export default class Database {
     return meta as Meta;
   }
 
-  async setTableMeta<Meta extends { lastSync: null | string }>(
+  private async setTableMeta<Meta extends { lastSync: null | string }>(
     table: TableDef,
     meta: Meta
   ): Promise<void> {
-    const metaKey = `${table.tablePath}.meta`;
+    const metaKey = storageKey.tableMeta(table);
 
     await this.storage.setItem(metaKey, meta);
   }
 
-  async syncTable(table: TableDef) {
+  private async syncTable(table: TableDef) {
     const meta = await this.getTableMeta(table);
 
     let since =
@@ -96,8 +111,8 @@ export default class Database {
           continue;
         }
 
-        const itemKey = `${table.tablePath}.rows.${item.id}`;
-        const indexesKey = `${table.tablePath}.rows.${item.id}.indexes`;
+        const itemKey = storageKey.row(table, item.id);
+        const indexesKey = storageKey.rowIndex(table, item.id);
         const oldIndexes: IndexValue = (await trx.getItem(indexesKey)) || {};
 
         await trx.setItem(itemKey, item);
@@ -123,7 +138,7 @@ export default class Database {
         for (let indexName of Object.keys(table.indexes)) {
           if (!(indexName in removeFrom) && !(indexName in updateTo)) continue;
 
-          const indexKey = `${table.tablePath}.indexes.${indexName}`;
+          const indexKey = storageKey.index(table, indexName);
 
           let index = ((await trx.getItem(indexKey)) || []) as TableIndex;
 
@@ -168,7 +183,7 @@ export default class Database {
 
   selectTable(...selector: string[]) {
     const [schemaName, tableName] = selector;
-    const tablePath = `${schemaName}.${tableName}`;
+    const tablePath = storageKey.table({ schemaName, tableName });
     const table = this.tables.find(table => table.tablePath === tablePath);
     if (!table)
       throw new Error(`The table with path ${tablePath} was not found.`);
@@ -180,12 +195,12 @@ export default class Database {
     return await this.queryTable(table, filter);
   }
 
-  async queryTable<T>(
+  private async queryTable<T>(
     table: TableDef,
     filter: any,
     limit: null | number = null
   ): Promise<T[] & { indexes: string[] }> {
-    const rowsKeys = `${table.tablePath}.rows`;
+    const rowsKeys = storageKey.rows(table);
     const scanFilters: { [key: string]: any } = {};
 
     let ids = filter.id ? [filter.id] : null;
@@ -202,7 +217,7 @@ export default class Database {
         continue;
       }
 
-      const indexKey = `${table.tablePath}.indexes.${indexName}`;
+      const indexKey = storageKey.index(table, indexName);
       const index = ((await this.storage.getItem(indexKey)) ||
         []) as TableIndex;
       const group = index.find(group => group.value === value);
@@ -242,7 +257,9 @@ export default class Database {
     const result = [];
 
     for (let id of ids) {
-      const row = (await this.storage.getItem(`${rowsKeys}.${id}`)) as any;
+      const row = (await this.storage.getItem(
+        storageKey.row(table, id)
+      )) as any;
       if (!row) continue;
 
       const matches = Object.entries(scanFilters).every(([column, value]) => {
@@ -272,14 +289,14 @@ export default class Database {
     });
   }
 
-  async deleteItem(trx: MemoryStorage, table: TableDef, id: string) {
-    const indexesKey = `${table.tablePath}.rows.${id}.indexes`;
-    const rowKey = `${table.tablePath}.rows.${id}`;
+  private async deleteItem(trx: MemoryStorage, table: TableDef, id: string) {
+    const indexesKey = storageKey.rowIndex(table, id);
+    const rowKey = storageKey.row(table, id);
     const removeFrom: IndexValue = (await trx.getItem(indexesKey)) || {};
 
     for (let indexName of Object.keys(table.indexes)) {
       const remove = removeFrom[indexName];
-      const indexKey = `${table.tablePath}.indexes.${indexName}`;
+      const indexKey = storageKey.index(table, indexName);
 
       let index = ((await trx.getItem(indexKey)) || []) as TableIndex;
 
@@ -303,7 +320,7 @@ export default class Database {
     return this.storage.clear();
   }
 
-  async clearTable(trx: MemoryStorage, table: TableDef) {
+  private async clearTable(trx: MemoryStorage, table: TableDef) {
     const ids = (await this.storage.getAllKeys()).filter(key =>
       key.startsWith(table.tablePath)
     );

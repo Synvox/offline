@@ -60,8 +60,13 @@ export class MemoryStorage implements StorageEngine {
 
   async transaction(fn: (trx: MemoryStorage) => Promise<void>) {
     const trx = new MemoryStorage(this);
-    await fn(trx);
-    await trx.commit();
+    try {
+      await fn(trx);
+      await trx.commit();
+    } catch (e) {
+      trx.clear();
+      throw e;
+    }
   }
 
   async commit() {
