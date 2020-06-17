@@ -29,7 +29,7 @@
     "singleQuote": true,
     "trailingComma": "es5"
   },
-  "name": "offline",
+  "name": "@synvox/offline",
   "author": "Ryan Allred",
   "module": "dist/offline.esm.js",
   "devDependencies": {

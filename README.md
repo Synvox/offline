@@ -1,27 +1,111 @@
-# TSDX Bootstrap
+# `@synvox/offline`
 
-This project was bootstrapped with [TSDX](https://github.com/jaredpalmer/tsdx).
+An offline sync database.
 
-## Local Development
+## Define a storage engine
 
-Below is a list of commands you will probably find useful.
+Offline does not come bundled with a storage engine, but you can implement it on top of any key-value store. Here's an example using localStorage:
 
-### `npm start` or `yarn start`
+```js
+import {StorageEngine, MemoryStorage} from '@synvox/offline'
 
-Runs the project in development/watch mode. Your project will be rebuilt upon changes. TSDX has a special logger for you convenience. Error messages are pretty printed and formatted for compatibility VS Code's Problems tab.
+class LocalStorageEngine implements StorageEngine {
+  async getItem<T>(key: string){
+    if (!(key in localStorage)) return undefined
+    return JSON.parse(localStorage[key]) as T
+  }
+  async setItem<T>(key: string, value: T){
+    const json = JSON.stringify(value)
+    localStorage[key] = json
+  }
+  async removeItem(key: string) {
+    delete localStorage[key]
+  }
+  async getAllKeys() {
+    return localStorage.keys()
+  };
+  async clear() {
+    localStorage.length=0
+  };
+  async transaction(fn: (trx: MemoryStorage) => Promise<void>){
+    const trx = new MemoryStorage(this);
+    try {
+      await fn(trx);
+      await trx.commit();
+    } catch (e) {
+      trx.clear();
+      throw e;
+    }
+  };
+}
+```
 
-<img src="https://user-images.githubusercontent.com/4060187/52168303-574d3a00-26f6-11e9-9f3b-71dbec9ebfcb.gif" width="600" />
+## Define tables you want to sync
 
-Your library will be rebuilt if you make edits.
+```js
+const storage = new LocalStorageEngine();
+const db = new Database(storage);
 
-### `npm run build` or `yarn build`
+db.table({
+  key: 'pages',
+  async getSince(since: Date) {
+    return getAllArticlesUpdatedAfter(date);
+  },
+});
 
-Bundles the package to the `dist` folder.
-The package is optimized and bundled with Rollup into multiple formats (CommonJS, UMD, and ES Module).
+db.sync();
+```
 
-<img src="https://user-images.githubusercontent.com/4060187/52168322-a98e5b00-26f6-11e9-8cf6-222d716b75ef.gif" width="600" />
+## Query the Database
 
-### `npm test` or `yarn test`
+```js
+await db.query('pages', {
+  bookId: '123',
+});
+```
 
-Runs the test watcher (Jest) in an interactive mode.
-By default, runs tests related to files changed since the last commit.
+This will scan through each item in the pages table for pages that have `bookId = 123`.
+
+## Define Indexes
+
+You can optionally specify indexes for offline to use instead of scanning through each item.
+Define `indexes` with `{[indexName:string]: columnName}`.
+
+```js
+db.table({
+  key: 'pages',
+  indexes: {
+    pageIdIndex: 'pageId',
+  },
+  async getSince(since: Date) {
+    return getAllArticlesUpdatedAfter(date);
+  },
+});
+
+await db.query('pages', {
+  bookId: '123',
+});
+```
+
+## Removing Items
+
+You can define a function which all changed items will go through to be checked if they were deleted. If the function returns true, the item will be removed from the storage engine and indexes updated accordingly.
+
+```js
+db.table({
+  key: 'pages',
+  indexes: {
+    pageIdIndex: 'pageId',
+  },
+  async getSince(since: Date) {
+    return getAllArticlesUpdatedAfter(date);
+  },
+  isItemDeleted(item) {
+    return item._deleted;
+  },
+});
+
+await db.query('pages', {
+  bookId: '123',
+});
+```
