@@ -221,8 +221,12 @@ export default class Database {
       }
 
       const indexKey = storageKey.index(table.key, indexName);
-      const index = ((await this.storage.getItem(indexKey)) ||
-        []) as TableIndex;
+
+      let index = (await this.storage.getItem(indexKey)) as
+        | TableIndex
+        | undefined;
+      if (!index) index = [];
+
       const group = index.find(group => group.value === value);
 
       if (!group) {
@@ -301,7 +305,8 @@ export default class Database {
   private async deleteItem(trx: MemoryStorage, table: TableDef, id: string) {
     const indexesKey = storageKey.rowIndex(table.key, id);
     const rowKey = storageKey.row(table.key, id);
-    const removeFrom: IndexValue = (await trx.getItem(indexesKey)) || {};
+    let removeFrom: IndexValue | undefined = await trx.getItem(indexesKey);
+    if (!removeFrom) removeFrom = {};
 
     for (let indexName of Object.keys(table.indexes)) {
       const remove = removeFrom[indexName];
