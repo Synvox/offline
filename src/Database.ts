@@ -11,6 +11,10 @@ export type TableDef = {
 type IndexValue = { [key: string]: any };
 type TableIndex = { value: any; ids: string[] }[];
 type Meta = { lastSync: null | string };
+type PaginationProps = {
+  limit?: number;
+  offset?: number;
+};
 
 const storageKey = {
   table: (key: string) => key,
@@ -110,7 +114,8 @@ export default class Database {
 
         const itemKey = storageKey.row(table.key, item.id);
         const indexesKey = storageKey.rowIndex(table.key, item.id);
-        const oldIndexes: IndexValue = (await trx.getItem(indexesKey)) || {};
+        let oldIndexes: IndexValue | undefined = await trx.getItem(indexesKey);
+        if (!oldIndexes) oldIndexes = {};
 
         await trx.setItem(itemKey, item);
         const newIndexes = recalculateIndexes(table, item);
@@ -188,15 +193,15 @@ export default class Database {
     return table;
   }
 
-  async query(key: string, filter: any) {
+  async query(key: string, filter: any, paginationProps: PaginationProps = {}) {
     const table = this.selectTable(key);
-    return await this.queryTable(table, filter);
+    return await this.queryTable(table, filter, paginationProps);
   }
 
   private async queryTable<T>(
     table: TableDef,
     filter: any,
-    limit: null | number = null
+    { limit, offset }: PaginationProps
   ): Promise<T[] & { indexes: string[] }> {
     const rowsKeys = storageKey.rows(table.key);
     const scanFilters: { [key: string]: any } = {};
@@ -254,6 +259,7 @@ export default class Database {
 
     const result = [];
 
+    let offsetRemaining = Number(offset);
     for (let id of ids) {
       const row = (await this.storage.getItem(
         storageKey.row(table.key, id)
@@ -266,8 +272,13 @@ export default class Database {
       });
 
       if (matches) {
+        if (offsetRemaining) {
+          offsetRemaining--;
+          continue;
+        }
+
         result.push(row);
-        if (limit !== null && result.length >= limit) break;
+        if (limit && result.length >= limit) break;
       }
     }
 
@@ -278,7 +289,7 @@ export default class Database {
 
   async delete(key: string, filter: any) {
     const table = this.selectTable(key);
-    const rows = await this.queryTable(table, filter);
+    const rows = await this.queryTable(table, filter, {});
 
     await this.storage.transaction(async (trx: MemoryStorage) => {
       for (let row of rows) {
