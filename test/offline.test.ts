@@ -9,8 +9,7 @@ it('supports basic functions', async () => {
   });
 
   db.table({
-    schemaName: 'public',
-    tableName: 'comments',
+    key: 'comments',
     indexes: {
       primary: 'id',
       enabled: 'active',
@@ -24,60 +23,47 @@ it('supports basic functions', async () => {
 
   await db.sync();
 
-  expect((await db.query(['public', 'comments'], { id: `1` })).length).toBe(1);
-  expect(
-    (await db.query(['public', 'comments'], { id: `1` })).indexes
-  ).toEqual(['public.comments.indexes.primary']);
-  expect(
-    (await db.query(['public', 'comments'], { active: true })).length
-  ).toEqual(20);
-  expect(
-    (await db.query(['public', 'comments'], { active: true })).indexes
-  ).toEqual(['public.comments.indexes.enabled']);
+  expect((await db.query('comments', { id: `1` })).length).toBe(1);
+  expect((await db.query('comments', { id: `1` })).indexes).toEqual([
+    'comments.indexes.primary',
+  ]);
+  expect((await db.query('comments', { active: true })).length).toEqual(20);
+  expect((await db.query('comments', { active: true })).indexes).toEqual([
+    'comments.indexes.enabled',
+  ]);
 
   pendingItems = [{ id: '1', body: 'new body', active: false }];
   await db.sync();
 
-  expect(
-    (await db.query(['public', 'comments'], { body: 'new body' })).length
-  ).toEqual(1);
-  expect(
-    (await db.query(['public', 'comments'], { body: 'new body' })).indexes
-  ).toEqual([]);
+  expect((await db.query('comments', { body: 'new body' })).length).toEqual(1);
+  expect((await db.query('comments', { body: 'new body' })).indexes).toEqual(
+    []
+  );
 
   // Re index
-  expect(
-    (await db.query(['public', 'comments'], { active: false })).length
-  ).toEqual(1);
-  expect(
-    (await db.query(['public', 'comments'], { active: false })).indexes
-  ).toEqual(['public.comments.indexes.enabled']);
+  expect((await db.query('comments', { active: false })).length).toEqual(1);
+  expect((await db.query('comments', { active: false })).indexes).toEqual([
+    'comments.indexes.enabled',
+  ]);
 
   // multiple indexes
   expect(
-    (await db.query(['public', 'comments'], { active: false, id: '1' })).length
+    (await db.query('comments', { active: false, id: '1' })).length
   ).toEqual(1);
   expect(
-    (await db.query(['public', 'comments'], { active: false, id: '1' })).indexes
-  ).toEqual([
-    'public.comments.indexes.enabled',
-    'public.comments.indexes.primary',
-  ]);
+    (await db.query('comments', { active: false, id: '1' })).indexes
+  ).toEqual(['comments.indexes.enabled', 'comments.indexes.primary']);
 
   pendingItems = [{ id: '2', body: 'new body', active: false }];
   await db.sync();
 
-  expect(
-    (await db.query(['public', 'comments'], { active: false })).length
-  ).toEqual(2);
-  expect(
-    (await db.query(['public', 'comments'], { active: false })).indexes
-  ).toEqual(['public.comments.indexes.enabled']);
+  expect((await db.query('comments', { active: false })).length).toEqual(2);
+  expect((await db.query('comments', { active: false })).indexes).toEqual([
+    'comments.indexes.enabled',
+  ]);
 
-  await db.delete(['public', 'comments'], { active: false });
-  expect(
-    (await db.query(['public', 'comments'], { active: false })).length
-  ).toEqual(0);
+  await db.delete('comments', { active: false });
+  expect((await db.query('comments', { active: false })).length).toEqual(0);
 
   // clear
   await db.clear();
@@ -97,8 +83,7 @@ it('deletes when items are deleted', async () => {
   });
 
   db.table({
-    schemaName: 'public',
-    tableName: 'comments',
+    key: 'comments',
     indexes: {
       primary: 'id',
       enabled: 'active',
@@ -115,12 +100,12 @@ it('deletes when items are deleted', async () => {
 
   await db.sync();
 
-  expect((await db.query(['public', 'comments'], {})).length).toEqual(20);
+  expect((await db.query('comments', {})).length).toEqual(20);
 
   pendingItems = [{ id: '1', body: 'bod', active: false, deleted: true }];
   await db.sync();
 
-  expect((await db.query(['public', 'comments'], {})).length).toEqual(19);
+  expect((await db.query('comments', {})).length).toEqual(19);
 });
 
 it('throws when a table is not found', async () => {
@@ -128,8 +113,7 @@ it('throws when a table is not found', async () => {
   const db = new Database(storage);
 
   db.table({
-    schemaName: 'public',
-    tableName: 'comments',
+    key: 'comments',
     indexes: {
       primary: 'id',
       enabled: 'active',
@@ -147,7 +131,7 @@ it('throws when a table is not found', async () => {
   let error: null | Error = null;
 
   try {
-    await db.query(['public', 'thing'], {});
+    await db.query('thing', {});
   } catch (e) {
     error = e;
   }
@@ -172,8 +156,7 @@ it('supports forced syncs', async () => {
   let postsSince = null;
 
   db.table({
-    schemaName: 'public',
-    tableName: 'comments',
+    key: 'comments',
     indexes: {
       primary: 'id',
       enabled: 'active',
@@ -188,8 +171,7 @@ it('supports forced syncs', async () => {
   });
 
   db.table({
-    schemaName: 'public',
-    tableName: 'posts',
+    key: 'posts',
     forceSync: true,
     indexes: {
       primary: 'id',
