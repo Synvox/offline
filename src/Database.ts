@@ -142,7 +142,8 @@ export default class Database {
 
           const indexKey = storageKey.index(table.key, indexName);
 
-          let index = ((await trx.getItem(indexKey)) || []) as TableIndex;
+          let index = (await trx.getItem(indexKey)) as TableIndex | undefined;
+          if (!index) index = [];
 
           const remove = removeFrom[indexName];
           if (remove !== undefined) {
