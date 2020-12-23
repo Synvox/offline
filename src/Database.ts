@@ -27,6 +27,26 @@ const storageKey = {
     `${storageKey.table(key)}.indexes.${indexName}`,
 };
 
+export class Table {
+  table: TableDef;
+  database: Database;
+  constructor(table: TableDef, database: Database) {
+    this.table = table;
+    this.database = database;
+  }
+  async query(filter: any, paginationProps: PaginationProps = {}) {
+    return await this.database.queryTable(this.table, filter, paginationProps);
+  }
+  async patch(item: any, trx?: MemoryStorage) {
+    if (trx) await this.database.setItem(trx, this.table, item);
+    else {
+      await this.database.transaction(async trx => {
+        await this.database.setItem(trx, this.table, item);
+      });
+    }
+  }
+}
+
 export default class Database {
   private storage: StorageEngine;
   private tables: TableDef[];
@@ -40,7 +60,13 @@ export default class Database {
 
   table(table: Partial<TableDef> & { key?: string }) {
     table.forceSync = Boolean(table.forceSync);
-    this.tables.push(table as TableDef);
+    const tableDef = table as TableDef;
+    this.tables.push(tableDef);
+    return new Table(tableDef, this);
+  }
+
+  async transaction(action: (trx: MemoryStorage) => Promise<void>) {
+    await this.storage.transaction(action);
   }
 
   async sync() {
@@ -49,7 +75,7 @@ export default class Database {
     );
 
     this.syncing = true;
-    await this.storage.transaction(async (trx: MemoryStorage) => {
+    await this.transaction(async (trx: MemoryStorage) => {
       for (let fn of commitFunctions) {
         await fn(trx);
       }
@@ -81,6 +107,86 @@ export default class Database {
     await this.storage.setItem(metaKey, meta);
   }
 
+  private recalculateIndexes(table: TableDef, item: any) {
+    return Object.fromEntries(
+      Object.entries(table.indexes).map(([indexName, columnName]) => {
+        const value = item[columnName];
+        return [indexName, value];
+      })
+    );
+  }
+
+  async setItem(trx: MemoryStorage, table: TableDef, item: any) {
+    if (table.isItemDeleted && table.isItemDeleted(item)) {
+      await this.deleteItem(trx, table, item.id);
+      return;
+    }
+
+    const itemKey = storageKey.row(table.key, item.id);
+    const indexesKey = storageKey.rowIndex(table.key, item.id);
+    let oldIndexes: IndexValue | undefined = await trx.getItem(indexesKey);
+    if (!oldIndexes) oldIndexes = {};
+
+    await trx.setItem(itemKey, item);
+    const newIndexes = this.recalculateIndexes(table, item);
+
+    let removeFrom: IndexValue = {};
+    for (let key in oldIndexes) {
+      if (!(key in newIndexes) || oldIndexes[key] !== newIndexes[key]) {
+        removeFrom[key] = oldIndexes[key];
+      }
+    }
+
+    let updateTo: IndexValue = {};
+
+    for (let key in newIndexes) {
+      if (!(key in oldIndexes) || oldIndexes[key] !== newIndexes[key]) {
+        updateTo[key] = newIndexes[key];
+      }
+    }
+
+    await trx.setItem(indexesKey, newIndexes);
+
+    for (let indexName of Object.keys(table.indexes)) {
+      if (!(indexName in removeFrom) && !(indexName in updateTo)) continue;
+
+      const indexKey = storageKey.index(table.key, indexName);
+
+      let index = (await trx.getItem(indexKey)) as TableIndex | undefined;
+      if (!index) index = [];
+
+      const remove = removeFrom[indexName];
+      if (remove !== undefined) {
+        index = index.map(group => {
+          if (group.value !== remove) return group;
+          return {
+            ...group,
+            ids: group.ids.filter(id => id !== item.id),
+          };
+        });
+      }
+
+      const add = updateTo[indexName];
+      if (add !== undefined) {
+        let found = false;
+        index = index.map(group => {
+          if (group.value !== add) return group;
+          found = true;
+          return {
+            ...group,
+            ids: [...group.ids, item.id],
+          };
+        });
+
+        if (!found) {
+          index = [...index, { value: add, ids: [item.id] }];
+        }
+      }
+
+      await trx.setItem(indexKey, index);
+    }
+  }
+
   private async syncTable(table: TableDef) {
     const meta = await this.getTableMeta(table);
 
@@ -97,84 +203,8 @@ export default class Database {
         await this.clearTable(trx, table);
       }
 
-      function recalculateIndexes(table: TableDef, item: any) {
-        return Object.fromEntries(
-          Object.entries(table.indexes).map(([indexName, columnName]) => {
-            const value = item[columnName];
-            return [indexName, value];
-          })
-        );
-      }
-
       for (let item of updatedItems) {
-        if (table.isItemDeleted && table.isItemDeleted(item)) {
-          await this.deleteItem(trx, table, item.id);
-          continue;
-        }
-
-        const itemKey = storageKey.row(table.key, item.id);
-        const indexesKey = storageKey.rowIndex(table.key, item.id);
-        let oldIndexes: IndexValue | undefined = await trx.getItem(indexesKey);
-        if (!oldIndexes) oldIndexes = {};
-
-        await trx.setItem(itemKey, item);
-        const newIndexes = recalculateIndexes(table, item);
-
-        let removeFrom: IndexValue = {};
-        for (let key in oldIndexes) {
-          if (!(key in newIndexes) || oldIndexes[key] !== newIndexes[key]) {
-            removeFrom[key] = oldIndexes[key];
-          }
-        }
-
-        let updateTo: IndexValue = {};
-
-        for (let key in newIndexes) {
-          if (!(key in oldIndexes) || oldIndexes[key] !== newIndexes[key]) {
-            updateTo[key] = newIndexes[key];
-          }
-        }
-
-        await trx.setItem(indexesKey, newIndexes);
-
-        for (let indexName of Object.keys(table.indexes)) {
-          if (!(indexName in removeFrom) && !(indexName in updateTo)) continue;
-
-          const indexKey = storageKey.index(table.key, indexName);
-
-          let index = (await trx.getItem(indexKey)) as TableIndex | undefined;
-          if (!index) index = [];
-
-          const remove = removeFrom[indexName];
-          if (remove !== undefined) {
-            index = index.map(group => {
-              if (group.value !== remove) return group;
-              return {
-                ...group,
-                ids: group.ids.filter(id => id !== item.id),
-              };
-            });
-          }
-
-          const add = updateTo[indexName];
-          if (add !== undefined) {
-            let found = false;
-            index = index.map(group => {
-              if (group.value !== add) return group;
-              found = true;
-              return {
-                ...group,
-                ids: [...group.ids, item.id],
-              };
-            });
-
-            if (!found) {
-              index = [...index, { value: add, ids: [item.id] }];
-            }
-          }
-
-          await trx.setItem(indexKey, index);
-        }
+        await this.setItem(trx, table, item);
       }
 
       await this.setTableMeta(table, {
@@ -199,7 +229,7 @@ export default class Database {
     return await this.queryTable(table, filter, paginationProps);
   }
 
-  private async queryTable<T>(
+  async queryTable<T>(
     table: TableDef,
     filter: any,
     { limit, offset }: PaginationProps
@@ -296,7 +326,7 @@ export default class Database {
     const table = this.selectTable(key);
     const rows = await this.queryTable(table, filter, {});
 
-    await this.storage.transaction(async (trx: MemoryStorage) => {
+    await this.transaction(async (trx: MemoryStorage) => {
       for (let row of rows) {
         await this.deleteItem(trx, table, (row as any).id);
       }
