@@ -25,11 +25,11 @@ it('supports basic functions', async () => {
 
   expect((await Comments.query({ id: `1` })).length).toBe(1);
   expect((await Comments.query({ id: `1` })).indexes).toEqual([
-    'comments.indexes.primary',
+    'comments/indexes/primary',
   ]);
   expect((await Comments.query({ active: true })).length).toEqual(20);
   expect((await Comments.query({ active: true })).indexes).toEqual([
-    'comments.indexes.enabled',
+    'comments/indexes/enabled',
   ]);
 
   pendingItems = [{ id: '1', body: 'new body', active: false }];
@@ -41,14 +41,14 @@ it('supports basic functions', async () => {
   // Re index
   expect((await Comments.query({ active: false })).length).toEqual(1);
   expect((await Comments.query({ active: false })).indexes).toEqual([
-    'comments.indexes.enabled',
+    'comments/indexes/enabled',
   ]);
 
   // multiple indexes
   expect((await Comments.query({ active: false, id: '1' })).length).toEqual(1);
   expect((await Comments.query({ active: false, id: '1' })).indexes).toEqual([
-    'comments.indexes.enabled',
-    'comments.indexes.primary',
+    'comments/indexes/enabled',
+    'comments/indexes/primary',
   ]);
 
   pendingItems = [{ id: '2', body: 'new body', active: false }];
@@ -56,7 +56,7 @@ it('supports basic functions', async () => {
 
   expect((await Comments.query({ active: false })).length).toEqual(2);
   expect((await Comments.query({ active: false })).indexes).toEqual([
-    'comments.indexes.enabled',
+    'comments/indexes/enabled',
   ]);
 
   await db.delete('comments', { active: false });
@@ -445,7 +445,7 @@ it('supports function queries (indexed at table def)', async () => {
 
   expect(result.indexes).toMatchInlineSnapshot(`
     Array [
-      "comments.indexes.indexed",
+      "comments/indexes/indexed",
     ]
   `);
 

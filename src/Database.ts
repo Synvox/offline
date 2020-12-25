@@ -18,14 +18,15 @@ type PaginationProps = {
 };
 
 const storageKey = {
-  table: (key: string) => key,
-  tableMeta: (key: string) => `${storageKey.table(key)}.meta`,
-  rows: (key: string) => `${storageKey.table(key)}.rows`,
-  row: (key: string, id: string) => `${storageKey.rows(key)}.${id}`,
+  table: (key: string) => encodeURIComponent(key),
+  tableMeta: (key: string) => `${storageKey.table(key)}/meta`,
+  rows: (key: string) => `${storageKey.table(key)}/rows`,
+  row: (key: string, id: string) =>
+    `${storageKey.rows(key)}/${encodeURIComponent(id)}`,
   rowIndex: (key: string, id: string) =>
-    `${storageKey.table(key)}.rows.${id}.indexes`,
+    `${storageKey.table(key)}/rows/${encodeURIComponent(id)}/indexes`,
   index: (key: string, indexName: string) =>
-    `${storageKey.table(key)}.indexes.${indexName}`,
+    `${storageKey.table(key)}/indexes/${encodeURIComponent(indexName)}`,
 };
 
 export class Table {
@@ -324,7 +325,7 @@ export default class Database {
         .map(key => {
           const [id, index] = key
             .replace(rowsKeys, '')
-            .split('.')
+            .split('/')
             .slice(1);
 
           if (index) return;
