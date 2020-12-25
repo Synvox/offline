@@ -290,3 +290,173 @@ it('supports table queries', async () => {
     ]
   `);
 });
+
+it('supports function queries', async () => {
+  const storage = new MemoryStorage();
+  const db = new Database(storage);
+
+  let pendingItems = Array.from({ length: 50 }).map((_, index) => {
+    return {
+      id: `${index}`,
+      active: index < 5,
+      number: index * 3,
+      deleted: false,
+    };
+  });
+
+  const Comments = db.table({
+    key: 'comments',
+    indexes: {
+      active: 'active',
+    },
+    async getSince() {
+      return pendingItems;
+    },
+    isItemDeleted(item) {
+      return item.deleted;
+    },
+  });
+
+  await db.sync();
+
+  let iterations = 0;
+  expect(
+    await Comments.query({
+      active: true,
+      number: (v: number) => {
+        iterations++;
+        return v % 2 === 0;
+      },
+    })
+  ).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "active": true,
+        "deleted": false,
+        "id": "0",
+        "number": 0,
+      },
+      Object {
+        "active": true,
+        "deleted": false,
+        "id": "2",
+        "number": 6,
+      },
+      Object {
+        "active": true,
+        "deleted": false,
+        "id": "4",
+        "number": 12,
+      },
+    ]
+  `);
+
+  expect(iterations).toMatchInlineSnapshot(`5`);
+});
+
+it('supports function queries (indexed)', async () => {
+  const storage = new MemoryStorage();
+  const db = new Database(storage);
+
+  let pendingItems = Array.from({ length: 50 }).map((_, index) => {
+    return {
+      id: `${index}`,
+      active: index < 5,
+      number: index * 3,
+      deleted: false,
+    };
+  });
+
+  const Comments = db.table({
+    key: 'comments',
+    indexes: {
+      active: 'active',
+      number: 'number',
+    },
+    async getSince() {
+      return pendingItems;
+    },
+    isItemDeleted(item) {
+      return item.deleted;
+    },
+  });
+
+  await db.sync();
+
+  let iterations = 0;
+  expect(
+    await Comments.query({
+      active: true,
+      number: (v: number) => {
+        iterations++;
+        return v % 2 === 0;
+      },
+    })
+  ).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "active": true,
+        "deleted": false,
+        "id": "0",
+        "number": 0,
+      },
+    ]
+  `);
+
+  expect(iterations).toMatchInlineSnapshot(`1`);
+});
+
+it('supports function queries (indexed at table def)', async () => {
+  const storage = new MemoryStorage();
+  const db = new Database(storage);
+
+  let pendingItems = Array.from({ length: 5 }).map((_, index) => {
+    return {
+      id: `${index}`,
+      active: index < 1,
+      number: index * 3,
+      deleted: false,
+    };
+  });
+
+  const Comments = db.table({
+    key: 'comments',
+    indexes: {
+      indexed: row => {
+        if (row.number === undefined || row.active === undefined) return;
+
+        return row.number % 2 === 0 && row.active;
+      },
+    },
+    async getSince() {
+      return pendingItems;
+    },
+    isItemDeleted(item) {
+      return item.deleted;
+    },
+  });
+
+  await db.sync();
+
+  const result = await Comments.query({
+    active: true,
+    number: 0,
+  });
+
+  expect(result.indexes).toMatchInlineSnapshot(`
+    Array [
+      "comments.indexes.indexed",
+    ]
+  `);
+
+  expect(result).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "active": true,
+        "deleted": false,
+        "id": "0",
+        "number": 0,
+      },
+    ]
+  `);
+});

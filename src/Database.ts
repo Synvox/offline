@@ -2,7 +2,8 @@ import { StorageEngine, MemoryStorage } from '.';
 
 export type TableDef = {
   key: string;
-  indexes: { [key: string]: string };
+  keyPath: string;
+  indexes: { [key: string]: string | ((row: any) => any) };
   getSince(since: Date | null): Promise<any[]>;
   isItemDeleted?(item: any): boolean;
   forceSync: boolean;
@@ -58,8 +59,9 @@ export default class Database {
     this.syncing = false;
   }
 
-  table(table: Partial<TableDef> & { key?: string }) {
+  table(table: Partial<TableDef> & { key: string }) {
     table.forceSync = Boolean(table.forceSync);
+    table.keyPath = table.keyPath ?? 'id';
     const tableDef = table as TableDef;
     this.tables.push(tableDef);
     return new Table(tableDef, this);
@@ -110,7 +112,11 @@ export default class Database {
   private recalculateIndexes(table: TableDef, item: any) {
     return Object.fromEntries(
       Object.entries(table.indexes).map(([indexName, columnName]) => {
-        const value = item[columnName];
+        const value =
+          typeof columnName === 'function'
+            ? columnName(item)
+            : item[columnName];
+
         return [indexName, value];
       })
     );
@@ -118,12 +124,12 @@ export default class Database {
 
   async setItem(trx: MemoryStorage, table: TableDef, item: any) {
     if (table.isItemDeleted && table.isItemDeleted(item)) {
-      await this.deleteItem(trx, table, item.id);
+      await this.deleteItem(trx, table, item[table.keyPath]);
       return;
     }
 
-    const itemKey = storageKey.row(table.key, item.id);
-    const indexesKey = storageKey.rowIndex(table.key, item.id);
+    const itemKey = storageKey.row(table.key, item[table.keyPath]);
+    const indexesKey = storageKey.rowIndex(table.key, item[table.keyPath]);
     let oldIndexes: IndexValue | undefined = await trx.getItem(indexesKey);
     if (!oldIndexes) oldIndexes = {};
 
@@ -140,7 +146,10 @@ export default class Database {
     let updateTo: IndexValue = {};
 
     for (let key in newIndexes) {
-      if (!(key in oldIndexes) || oldIndexes[key] !== newIndexes[key]) {
+      if (
+        newIndexes[key] !== undefined &&
+        (!(key in oldIndexes) || oldIndexes[key] !== newIndexes[key])
+      ) {
         updateTo[key] = newIndexes[key];
       }
     }
@@ -161,7 +170,7 @@ export default class Database {
           if (group.value !== remove) return group;
           return {
             ...group,
-            ids: group.ids.filter(id => id !== item.id),
+            ids: group.ids.filter(id => id !== item[table.keyPath]),
           };
         });
       }
@@ -174,12 +183,12 @@ export default class Database {
           found = true;
           return {
             ...group,
-            ids: [...group.ids, item.id],
+            ids: [...group.ids, item[table.keyPath]],
           };
         });
 
         if (!found) {
-          index = [...index, { value: add, ids: [item.id] }];
+          index = [...index, { value: add, ids: [item[table.keyPath]] }];
         }
       }
 
@@ -237,14 +246,43 @@ export default class Database {
     const rowsKeys = storageKey.rows(table.key);
     const scanFilters: { [key: string]: any } = {};
 
-    let ids = filter.id ? [filter.id] : null;
+    let ids = filter[table.keyPath] ? [filter[table.keyPath]] : null;
     let indexes = [];
+
+    for (let [indexName, indexFactory] of Object.entries(table.indexes)) {
+      if (typeof indexFactory !== 'function') continue;
+
+      const indexKey = storageKey.index(table.key, indexName);
+
+      let index = (await this.storage.getItem(indexKey)) as
+        | TableIndex
+        | undefined;
+
+      if (!index) index = [];
+
+      const indexValue = indexFactory(filter);
+      if (indexValue === undefined) continue;
+
+      const group = index.find(group => group.value === indexValue);
+
+      if (!group) continue;
+
+      indexes.push(indexKey);
+
+      if (ids === null) {
+        // use index ids as id set
+        ids = group.ids;
+      } else {
+        // find intersection of ids and group ids
+        ids = ids.filter(id => group.ids.includes(id));
+      }
+    }
 
     for (let [name, value] of Object.entries(filter)) {
       let [indexName] =
-        Object.entries(table.indexes).find(
-          ([_, columnName]) => columnName === name
-        ) || [];
+        Object.entries(table.indexes)
+          .filter(([_, v]) => typeof v === 'string')
+          .find(([_, columnName]) => columnName === name) || [];
 
       if (!indexName) {
         scanFilters[name] = value;
@@ -258,7 +296,10 @@ export default class Database {
         | undefined;
       if (!index) index = [];
 
-      const group = index.find(group => group.value === value);
+      const group =
+        typeof value === 'function'
+          ? index.find(group => (value as any)(group.value))
+          : index.find(group => group.value === value);
 
       if (!group) {
         scanFilters[name] = value;
@@ -302,7 +343,7 @@ export default class Database {
       if (!row) continue;
 
       const matches = Object.entries(scanFilters).every(([column, value]) => {
-        if (row[column] === undefined) return true; // @TODO for view functions?
+        if (typeof value === 'function') return Boolean(value(row[column]));
         return row[column] === value;
       });
 
@@ -328,7 +369,7 @@ export default class Database {
 
     await this.transaction(async (trx: MemoryStorage) => {
       for (let row of rows) {
-        await this.deleteItem(trx, table, (row as any).id);
+        await this.deleteItem(trx, table, (row as any)[table.keyPath]);
       }
     });
   }
