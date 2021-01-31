@@ -30,20 +30,30 @@ const storageKey = {
 };
 
 export class Table {
-  table: TableDef;
+  key: string;
+  keyPath: string;
+  indexes: { [key: string]: string | ((row: any) => any) };
+  getSince: (since: Date | null) => Promise<any[]>;
+  isItemDeleted?(item: any): boolean;
+  forceSync: boolean;
   database: Database;
-  constructor(table: TableDef, database: Database) {
-    this.table = table;
+  constructor(tableDef: TableDef, database: Database) {
     this.database = database;
+    this.key = tableDef.key;
+    this.keyPath = tableDef.keyPath;
+    this.indexes = tableDef.indexes ?? {};
+    this.getSince = tableDef.getSince ?? (() => []);
+    this.isItemDeleted = tableDef.isItemDeleted ?? (() => false);
+    this.forceSync = tableDef.forceSync ?? false;
   }
   async query(filter: any, paginationProps: PaginationProps = {}) {
-    return await this.database.queryTable(this.table, filter, paginationProps);
+    return await this.database.queryTable(this, filter, paginationProps);
   }
   async patch(item: any, trx?: MemoryStorage) {
-    if (trx) await this.database.setItem(trx, this.table, item);
+    if (trx) await this.database.setItem(trx, this, item);
     else {
-      await this.database.transaction(async trx => {
-        await this.database.setItem(trx, this.table, item);
+      await this.database.transaction(async (trx) => {
+        await this.database.setItem(trx, this, item);
       });
     }
   }
@@ -51,7 +61,7 @@ export class Table {
 
 export default class Database {
   private storage: StorageEngine;
-  private tables: TableDef[];
+  private tables: Table[];
   private syncing: boolean;
 
   constructor(storage: StorageEngine) {
@@ -60,12 +70,13 @@ export default class Database {
     this.syncing = false;
   }
 
-  table(table: Partial<TableDef> & { key: string }) {
-    table.forceSync = Boolean(table.forceSync);
-    table.keyPath = table.keyPath ?? 'id';
-    const tableDef = table as TableDef;
-    this.tables.push(tableDef);
-    return new Table(tableDef, this);
+  table(tableDef: Partial<TableDef> & { key: string }) {
+    tableDef.forceSync = Boolean(tableDef.forceSync);
+    tableDef.keyPath = tableDef.keyPath ?? 'id';
+    const tableDefFull = tableDef as TableDef;
+    const table = new Table(tableDefFull, this);
+    this.tables.push(table);
+    return table;
   }
 
   async transaction(action: (trx: MemoryStorage) => Promise<void>) {
@@ -74,7 +85,7 @@ export default class Database {
 
   async sync() {
     const commitFunctions = await Promise.all(
-      Object.values(this.tables).map(table => this.syncTable(table))
+      Object.values(this.tables).map((table) => this.syncTable(table))
     );
 
     this.syncing = true;
@@ -123,7 +134,7 @@ export default class Database {
     );
   }
 
-  async setItem(trx: MemoryStorage, table: TableDef, item: any) {
+  async setItem(trx: MemoryStorage, table: Table, item: any) {
     if (table.isItemDeleted && table.isItemDeleted(item)) {
       await this.deleteItem(trx, table, item[table.keyPath]);
       return;
@@ -167,11 +178,11 @@ export default class Database {
 
       const remove = removeFrom[indexName];
       if (remove !== undefined) {
-        index = index.map(group => {
+        index = index.map((group) => {
           if (group.value !== remove) return group;
           return {
             ...group,
-            ids: group.ids.filter(id => id !== item[table.keyPath]),
+            ids: group.ids.filter((id) => id !== item[table.keyPath]),
           };
         });
       }
@@ -179,7 +190,7 @@ export default class Database {
       const add = updateTo[indexName];
       if (add !== undefined) {
         let found = false;
-        index = index.map(group => {
+        index = index.map((group) => {
           if (group.value !== add) return group;
           found = true;
           return {
@@ -197,7 +208,7 @@ export default class Database {
     }
   }
 
-  private async syncTable(table: TableDef) {
+  private async syncTable(table: Table) {
     const meta = await this.getTableMeta(table);
 
     let since =
@@ -208,6 +219,11 @@ export default class Database {
     const data = await table.getSince(since);
     updatedItems.push(...data);
 
+    return this.mergeTable(table, updatedItems);
+  }
+
+  async mergeTable(table: Table, updatedItems: any[]) {
+    const meta = await this.getTableMeta(table);
     return async (trx: MemoryStorage) => {
       if (table.forceSync) {
         await this.clearTable(trx, table);
@@ -225,11 +241,11 @@ export default class Database {
   }
 
   hasTable(key: string) {
-    return this.tables.some(table => table.key === key);
+    return this.tables.some((table) => table.key === key);
   }
 
-  private selectTable(key: string) {
-    const table = this.tables.find(table => table.key === key);
+  selectTable(key: string) {
+    const table = this.tables.find((table) => table.key === key);
     if (!table) throw new Error(`The table with path ${key} was not found.`);
     return table;
   }
@@ -240,7 +256,7 @@ export default class Database {
   }
 
   async queryTable<T>(
-    table: TableDef,
+    table: Table,
     filter: any,
     { limit, offset }: PaginationProps
   ): Promise<T[] & { indexes: string[] }> {
@@ -264,7 +280,7 @@ export default class Database {
       const indexValue = indexFactory(filter);
       if (indexValue === undefined) continue;
 
-      const group = index.find(group => group.value === indexValue);
+      const group = index.find((group) => group.value === indexValue);
 
       if (!group) continue;
 
@@ -275,7 +291,7 @@ export default class Database {
         ids = group.ids;
       } else {
         // find intersection of ids and group ids
-        ids = ids.filter(id => group.ids.includes(id));
+        ids = ids.filter((id) => group.ids.includes(id));
       }
     }
 
@@ -299,8 +315,8 @@ export default class Database {
 
       const group =
         typeof value === 'function'
-          ? index.find(group => (value as any)(group.value))
-          : index.find(group => group.value === value);
+          ? index.find((group) => (value as any)(group.value))
+          : index.find((group) => group.value === value);
 
       if (!group) {
         scanFilters[name] = value;
@@ -314,19 +330,16 @@ export default class Database {
         ids = group.ids;
       } else {
         // find intersection of ids and group ids
-        ids = ids.filter(id => group.ids.includes(id));
+        ids = ids.filter((id) => group.ids.includes(id));
       }
     }
 
     if (ids === null) {
       // if we still don't have any ids, get them all :(
       ids = (await this.storage.getAllKeys())
-        .filter(key => key.startsWith(rowsKeys))
-        .map(key => {
-          const [id, index] = key
-            .replace(rowsKeys, '')
-            .split('/')
-            .slice(1);
+        .filter((key) => key.startsWith(rowsKeys))
+        .map((key) => {
+          const [id, index] = key.replace(rowsKeys, '').split('/').slice(1);
 
           if (index) return;
           return id;
@@ -375,7 +388,7 @@ export default class Database {
     });
   }
 
-  private async deleteItem(trx: MemoryStorage, table: TableDef, id: string) {
+  private async deleteItem(trx: MemoryStorage, table: Table, id: string) {
     const indexesKey = storageKey.rowIndex(table.key, id);
     const rowKey = storageKey.row(table.key, id);
     let removeFrom: IndexValue | undefined = await trx.getItem(indexesKey);
@@ -389,11 +402,11 @@ export default class Database {
       if (!index) index = [];
 
       if (remove !== undefined) {
-        index = index.map(group => {
+        index = index.map((group) => {
           if (group.value !== remove) return group;
           return {
             ...group,
-            ids: group.ids.filter(i => i !== id),
+            ids: group.ids.filter((i) => i !== id),
           };
         });
       }
@@ -408,8 +421,8 @@ export default class Database {
     return this.storage.clear();
   }
 
-  private async clearTable(trx: MemoryStorage, table: TableDef) {
-    const ids = (await this.storage.getAllKeys()).filter(key =>
+  private async clearTable(trx: MemoryStorage, table: Table) {
+    const ids = (await this.storage.getAllKeys()).filter((key) =>
       key.startsWith(table.key)
     );
 

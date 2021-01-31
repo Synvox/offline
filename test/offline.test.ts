@@ -460,3 +460,42 @@ it('supports function queries (indexed at table def)', async () => {
     ]
   `);
 });
+
+it('supports bulk updates', async () => {
+  const storage = new MemoryStorage();
+  const db = new Database(storage);
+
+  let pendingItems = Array.from({ length: 5 }).map((_, index) => {
+    return {
+      id: `${index}`,
+      active: index < 1,
+      number: index * 3,
+      deleted: false,
+    };
+  });
+
+  const Comments = db.table({
+    key: 'comments',
+  });
+
+  const commit = await db.mergeTable(Comments, pendingItems);
+  await db.transaction(async trx => {
+    await commit(trx);
+  });
+
+  const result = await Comments.query({
+    active: true,
+    number: 0,
+  });
+
+  expect(result).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "active": true,
+        "deleted": false,
+        "id": "0",
+        "number": 0,
+      },
+    ]
+  `);
+});
