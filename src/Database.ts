@@ -46,8 +46,8 @@ export class Table {
     this.isItemDeleted = tableDef.isItemDeleted ?? (() => false);
     this.forceSync = tableDef.forceSync ?? false;
   }
-  async query(filter: any, paginationProps: PaginationProps = {}) {
-    return await this.database.queryTable(this, filter, paginationProps);
+  async query<T>(filter: any, paginationProps: PaginationProps = {}) {
+    return await this.database.queryTable<T>(this, filter, paginationProps);
   }
   async patch(item: any, trx?: MemoryStorage) {
     if (trx) await this.database.setItem(trx, this, item);
