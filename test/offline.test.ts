@@ -499,3 +499,78 @@ it('supports bulk updates', async () => {
     ]
   `);
 });
+
+it('supports url keys', async () => {
+  const storage = new MemoryStorage();
+  const db = new Database(storage);
+
+  let pendingItems = Array.from({ length: 5 }).map((_, index) => {
+    return {
+      id: `http://thing.com/${index}`,
+      hash: `http://hash.com/${index}`,
+    };
+  });
+
+  const Comments = db.table({
+    key: 'comments',
+    indexes: {
+      hash: 'hash',
+    },
+  });
+
+  const commit = await db.mergeTable(Comments, pendingItems);
+  await db.transaction(async trx => {
+    await commit(trx);
+  });
+
+  expect(await Comments.query({})).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "hash": "http://hash.com/0",
+        "id": "http://thing.com/0",
+      },
+      Object {
+        "hash": "http://hash.com/1",
+        "id": "http://thing.com/1",
+      },
+      Object {
+        "hash": "http://hash.com/2",
+        "id": "http://thing.com/2",
+      },
+      Object {
+        "hash": "http://hash.com/3",
+        "id": "http://thing.com/3",
+      },
+      Object {
+        "hash": "http://hash.com/4",
+        "id": "http://thing.com/4",
+      },
+    ]
+  `);
+
+  expect(
+    await Comments.query({
+      id: `http://thing.com/1`,
+    })
+  ).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "hash": "http://hash.com/1",
+        "id": "http://thing.com/1",
+      },
+    ]
+  `);
+
+  expect(
+    await Comments.query({
+      hash: `http://hash.com/2`,
+    })
+  ).toMatchInlineSnapshot(`
+    Array [
+      Object {
+        "hash": "http://hash.com/2",
+        "id": "http://thing.com/2",
+      },
+    ]
+  `);
+});

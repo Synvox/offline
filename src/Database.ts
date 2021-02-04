@@ -52,7 +52,7 @@ export class Table {
   async patch(item: any, trx?: MemoryStorage) {
     if (trx) await this.database.setItem(trx, this, item);
     else {
-      await this.database.transaction(async (trx) => {
+      await this.database.transaction(async trx => {
         await this.database.setItem(trx, this, item);
       });
     }
@@ -85,7 +85,7 @@ export default class Database {
 
   async sync() {
     const commitFunctions = await Promise.all(
-      Object.values(this.tables).map((table) => this.syncTable(table))
+      Object.values(this.tables).map(table => this.syncTable(table))
     );
 
     this.syncing = true;
@@ -178,11 +178,11 @@ export default class Database {
 
       const remove = removeFrom[indexName];
       if (remove !== undefined) {
-        index = index.map((group) => {
+        index = index.map(group => {
           if (group.value !== remove) return group;
           return {
             ...group,
-            ids: group.ids.filter((id) => id !== item[table.keyPath]),
+            ids: group.ids.filter(id => id !== item[table.keyPath]),
           };
         });
       }
@@ -190,7 +190,7 @@ export default class Database {
       const add = updateTo[indexName];
       if (add !== undefined) {
         let found = false;
-        index = index.map((group) => {
+        index = index.map(group => {
           if (group.value !== add) return group;
           found = true;
           return {
@@ -241,11 +241,11 @@ export default class Database {
   }
 
   hasTable(key: string) {
-    return this.tables.some((table) => table.key === key);
+    return this.tables.some(table => table.key === key);
   }
 
   selectTable(key: string) {
-    const table = this.tables.find((table) => table.key === key);
+    const table = this.tables.find(table => table.key === key);
     if (!table) throw new Error(`The table with path ${key} was not found.`);
     return table;
   }
@@ -280,18 +280,19 @@ export default class Database {
       const indexValue = indexFactory(filter);
       if (indexValue === undefined) continue;
 
-      const group = index.find((group) => group.value === indexValue);
+      const group = index.find(group => group.value === indexValue);
 
       if (!group) continue;
 
       indexes.push(indexKey);
+      const groupIds = group.ids.map(decodeURIComponent);
 
       if (ids === null) {
         // use index ids as id set
-        ids = group.ids;
+        ids = groupIds;
       } else {
         // find intersection of ids and group ids
-        ids = ids.filter((id) => group.ids.includes(id));
+        ids = ids.filter(id => groupIds.includes(id));
       }
     }
 
@@ -315,8 +316,8 @@ export default class Database {
 
       const group =
         typeof value === 'function'
-          ? index.find((group) => (value as any)(group.value))
-          : index.find((group) => group.value === value);
+          ? index.find(group => (value as any)(group.value))
+          : index.find(group => group.value === value);
 
       if (!group) {
         scanFilters[name] = value;
@@ -325,24 +326,29 @@ export default class Database {
 
       indexes.push(indexKey);
 
+      const groupIds = group.ids.map(decodeURIComponent);
+
       if (ids === null) {
         // use index ids as id set
-        ids = group.ids;
+        ids = groupIds;
       } else {
         // find intersection of ids and group ids
-        ids = ids.filter((id) => group.ids.includes(id));
+        ids = ids.filter(id => groupIds.includes(id));
       }
     }
 
     if (ids === null) {
       // if we still don't have any ids, get them all :(
       ids = (await this.storage.getAllKeys())
-        .filter((key) => key.startsWith(rowsKeys))
-        .map((key) => {
-          const [id, index] = key.replace(rowsKeys, '').split('/').slice(1);
+        .filter(key => key.startsWith(rowsKeys))
+        .map(key => {
+          const [id, index] = key
+            .replace(rowsKeys, '')
+            .split('/')
+            .slice(1);
 
           if (index) return;
-          return id;
+          return decodeURIComponent(id);
         })
         .filter(Boolean);
     }
@@ -402,11 +408,11 @@ export default class Database {
       if (!index) index = [];
 
       if (remove !== undefined) {
-        index = index.map((group) => {
+        index = index.map(group => {
           if (group.value !== remove) return group;
           return {
             ...group,
-            ids: group.ids.filter((i) => i !== id),
+            ids: group.ids.filter(i => i !== id),
           };
         });
       }
@@ -422,7 +428,7 @@ export default class Database {
   }
 
   private async clearTable(trx: MemoryStorage, table: Table) {
-    const ids = (await this.storage.getAllKeys()).filter((key) =>
+    const ids = (await this.storage.getAllKeys()).filter(key =>
       key.startsWith(table.key)
     );
 
