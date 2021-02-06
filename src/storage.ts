@@ -75,12 +75,14 @@ export class MemoryStorage implements StorageEngine {
     const pendingKeys = this.pendingKeys;
     this.pendingKeys = [];
 
-    for (let key of pendingKeys) {
-      if (this.state.hasOwnProperty(key)) {
-        await this.fallback.setItem(key, this.state[key]);
-      } else {
-        await this.fallback.removeItem(key);
-      }
-    }
+    await Promise.all(
+      pendingKeys.map(async key => {
+        if (this.state.hasOwnProperty(key)) {
+          await this.fallback!.setItem(key, this.state[key]);
+        } else {
+          await this.fallback!.removeItem(key);
+        }
+      })
+    );
   }
 }
